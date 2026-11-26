@@ -31,9 +31,24 @@ export interface TaskSnapshot {
   today: string;
 }
 
-function apiError(body: unknown) {
+export class ApiError extends Error {
+  readonly status: number;
+  readonly code?: string;
+
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
+function apiError(body: unknown, status: number) {
   const parsed = errorSchema.safeParse(body);
-  return new Error(parsed.success ? parsed.data.message || parsed.data.error : "服务暂时不可用。");
+  if (parsed.success) {
+    return new ApiError(parsed.data.message || parsed.data.error, status, parsed.data.error);
+  }
+  return new ApiError("服务暂时不可用。", status);
 }
 
 async function readJson(response: Response): Promise<unknown> {
@@ -41,7 +56,7 @@ async function readJson(response: Response): Promise<unknown> {
 }
 
 async function expectSuccess(response: Response) {
-  if (!response.ok) throw apiError(await readJson(response));
+  if (!response.ok) throw apiError(await readJson(response), response.status);
 }
 
 const collection = "/api/tasks";
@@ -55,7 +70,7 @@ export async function requestReply(messages: ChatMessage[], conversationId: stri
     body: JSON.stringify({ messages, conversationId }),
   });
   const body = await readJson(response);
-  if (!response.ok) throw apiError(body);
+  if (!response.ok) throw apiError(body, response.status);
   const result = chatResponseSchema.safeParse(body);
   if (!result.success) throw new Error("收到的对话响应格式无效。");
   return result.data;
@@ -64,7 +79,7 @@ export async function requestReply(messages: ChatMessage[], conversationId: stri
 export async function fetchTasks(): Promise<TaskSnapshot> {
   const response = await fetch(collection, { cache: "no-store" });
   const body = await readJson(response);
-  if (!response.ok) throw apiError(body);
+  if (!response.ok) throw apiError(body, response.status);
   const result = tasksSchema.safeParse(body);
   if (!result.success) throw new Error("收到的任务列表格式无效。");
   const date = response.headers.get("X-Task-Today");
@@ -89,7 +104,7 @@ export async function deleteTask(id: string): Promise<DeleteConfirmation | undef
     const parsed = confirmationSchema.safeParse(body);
     if (parsed.success) return parsed.data;
   }
-  throw apiError(body);
+  throw apiError(body, response.status);
 }
 
 export async function confirmTaskDeletion(confirmationId: string) {

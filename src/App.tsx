@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent }
 import type { ChatMessage } from "../shared/chat.ts";
 import { dateInTimeZone, effortLabels, normalizePriority } from "../shared/task-display.ts";
 import {
+  ApiError,
   cancelTaskDeletion,
   confirmTaskDeletion,
   deleteTask,
@@ -205,10 +206,12 @@ function TaskBoard({
 function DeleteDialog({
   confirmation,
   busy,
+  error,
   onDecision,
 }: {
   confirmation: DeleteConfirmation;
   busy: boolean;
+  error: string;
   onDecision: (accept: boolean) => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -237,6 +240,11 @@ function DeleteDialog({
           </li>
         ))}
       </ul>
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
       <div className="dialog-actions">
         <button
           type="button"
@@ -275,6 +283,7 @@ export default function App() {
   const [actionError, setActionError] = useState("");
   const [boardBusy, setBoardBusy] = useState(false);
   const [confirmation, setConfirmation] = useState<DeleteConfirmation>();
+  const [dialogError, setDialogError] = useState("");
   const input = useRef<HTMLTextAreaElement>(null);
   const sending = useRef(false);
   const taskAction = useRef(false);
@@ -406,6 +415,7 @@ export default function App() {
           }}
           onDelete={(task) => {
             void runTaskAction(async () => {
+              setDialogError("");
               setConfirmation(await deleteTask(task.id));
             });
           }}
@@ -415,13 +425,24 @@ export default function App() {
         <DeleteDialog
           confirmation={confirmation}
           busy={boardBusy}
+          error={dialogError}
           onDecision={(accept) => {
             void runTaskAction(async () => {
+              setDialogError("");
               try {
                 const request = accept ? confirmTaskDeletion : cancelTaskDeletion;
                 await request(confirmation.confirmationId);
-              } finally {
                 setConfirmation(undefined);
+              } catch (cause) {
+                if (cause instanceof ApiError && cause.status >= 400 && cause.status < 500) {
+                  setConfirmation(undefined);
+                  throw cause;
+                }
+                setDialogError(
+                  cause instanceof Error
+                    ? `${cause.message}，请重试。`
+                    : "网络或服务异常，请重试。",
+                );
               }
             });
           }}
