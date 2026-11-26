@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { ChatMessage } from "../shared/chat.ts";
 
-const examplePrompts = ["提醒我买牛奶", "看看我的待办"];
+const examplePrompts = ["提醒我买牛奶", "看看我的待办", "今天有哪些任务到期？"];
 
 interface ChatHistoryProps {
   messages: ChatMessage[];
@@ -24,7 +24,7 @@ export function ChatHistory({ messages, pending, onSelectPrompt }: ChatHistoryPr
           <p>今天有什么待办？</p>
           <div className="examples">
             {examplePrompts.map((prompt) => (
-              <button key={prompt} onClick={() => onSelectPrompt(prompt)}>
+              <button key={prompt} disabled={pending} onClick={() => onSelectPrompt(prompt)}>
                 {prompt}
                 <span aria-hidden="true">↗</span>
               </button>
@@ -34,7 +34,16 @@ export function ChatHistory({ messages, pending, onSelectPrompt }: ChatHistoryPr
       ) : (
         <div className="thread" role="log" aria-label="对话记录" aria-live="polite">
           {messages.map((message, index) => (
-            <div key={index} className={`message ${message.role}`}>
+            <div
+              key={index}
+              className={
+                "message " +
+                message.role +
+                (message.metadata?.kind === "pending_confirmation_prompt"
+                  ? " confirmation-message"
+                  : "")
+              }
+            >
               <small>{message.role === "user" ? "你" : "小明智能体"}</small>
               <div>{message.content}</div>
             </div>

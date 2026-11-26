@@ -12,6 +12,10 @@ paths:
       responses:
         "200":
           description: 任务列表；空列表为 []
+          headers:
+            X-Task-Today:
+              description: 看板用于判断到期状态的服务端日期，采用应用时区
+              schema: { $ref: "#/components/schemas/DueDate" }
           content:
             application/json:
               schema:
@@ -30,6 +34,10 @@ paths:
               required: [title]
               properties:
                 title: { $ref: "#/components/schemas/Title" }
+                dueDate: { $ref: "#/components/schemas/DueDate" }
+                priority: { $ref: "#/components/schemas/Priority" }
+                effort: { $ref: "#/components/schemas/Effort" }
+                parentId: { $ref: "#/components/schemas/ParentId" }
       responses:
         "201":
           description: 新建的任务
@@ -42,10 +50,10 @@ paths:
       - name: id
         in: path
         required: true
-        schema: { type: string }
+        schema: { type: string, minLength: 1 }
     patch:
       operationId: updateTask
-      summary: 修改标题或完成状态
+      summary: 修改任务字段
       requestBody:
         required: true
         content:
@@ -54,9 +62,26 @@ paths:
               type: object
               minProperties: 1
               additionalProperties: false
+              description: 未提供的字段保留原值。传 null 清除对应的可选扩展字段。
               properties:
                 title: { $ref: "#/components/schemas/Title" }
                 done: { type: boolean }
+                dueDate:
+                  anyOf:
+                    - $ref: "#/components/schemas/DueDate"
+                    - type: "null"
+                priority:
+                  anyOf:
+                    - $ref: "#/components/schemas/Priority"
+                    - type: "null"
+                effort:
+                  anyOf:
+                    - $ref: "#/components/schemas/Effort"
+                    - type: "null"
+                parentId:
+                  anyOf:
+                    - $ref: "#/components/schemas/ParentId"
+                    - type: "null"
       responses:
         "200":
           description: 更新后的任务
@@ -67,11 +92,48 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
     delete:
       operationId: deleteTask
-      summary: 删除一条任务
+      summary: 删除一条任务或发起级联删除确认
+      description: 含子任务时返回待确认操作并保留全部任务。查询参数 cascade 不影响确认流程。
       responses:
         "204":
           description: 删除成功，响应体为空
         "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: 含子任务，需要确认级联删除
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeleteConfirmation" }
+  /api/tasks/confirmations/{confirmationId}:
+    parameters:
+      - name: confirmationId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: confirmTaskDeletion
+      summary: 确认待处理的 REST 级联删除
+      description: 确认 ID 有效期为十分钟。服务端消费 ID 后重新校验目标与子任务，再一次性删除。
+      responses:
+        "204":
+          description: 级联删除成功，响应体为空
+        "404": { $ref: "#/components/responses/ConfirmationNotFound" }
+        "409":
+          description: 确认已过期（CONFIRMATION_EXPIRED）或目标集合已变化（CONFIRMATION_TARGET_CHANGED）
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConfirmationError" }
+    delete:
+      operationId: cancelTaskDeletion
+      summary: 取消待处理的 REST 级联删除
+      responses:
+        "204":
+          description: 删除操作已取消，确认 ID 即刻失效
+        "404": { $ref: "#/components/responses/ConfirmationNotFound" }
+        "409":
+          description: 确认已过期（CONFIRMATION_EXPIRED）
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConfirmationError" }
 components:
   schemas:
     Title:
@@ -79,13 +141,53 @@ components:
       description: 首尾空白会自动去除，去除后长度应为 1 至 200
       minLength: 1
       maxLength: 200
+    DueDate:
+      type: string
+      format: date
+      pattern: '^\d{4}-\d{2}-\d{2}$'
+      description: 真实日历日期，使用 YYYY-MM-DD
+    Priority:
+      description: 数字优先级按原值保存
+      oneOf:
+        - type: string
+          enum: [low, medium, high]
+        - type: number
+    Effort:
+      type: string
+      enum: [small, medium, large]
+    ParentId:
+      type: string
+      minLength: 1
+      description: 另一条已存在的根任务 ID。任务只允许一层父子关系。
     Task:
       type: object
       required: [id, title, done]
       properties:
-        id: { type: string, format: uuid }
-        title: { $ref: "#/components/schemas/Title" }
+        id: { type: string, minLength: 1 }
+        title: { type: string }
         done: { type: boolean }
+        dueDate: { $ref: "#/components/schemas/DueDate" }
+        priority: { $ref: "#/components/schemas/Priority" }
+        effort: { $ref: "#/components/schemas/Effort" }
+        parentId: { $ref: "#/components/schemas/ParentId" }
+    DeleteConfirmation:
+      type: object
+      required: [error, confirmationId, affectedTasks, message]
+      properties:
+        error: { const: CONFIRMATION_REQUIRED }
+        confirmationId: { type: string, format: uuid }
+        affectedTasks:
+          type: array
+          items: { $ref: "#/components/schemas/Task" }
+        message: { type: string }
+    ConfirmationError:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+          enum: [CONFIRMATION_NOT_FOUND, CONFIRMATION_EXPIRED, CONFIRMATION_TARGET_CHANGED]
+        message: { type: string }
     Error:
       type: object
       required: [error]
@@ -102,3 +204,8 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
+    ConfirmationNotFound:
+      description: 确认不存在、已使用或属于其他渠道（CONFIRMATION_NOT_FOUND）
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ConfirmationError" }
